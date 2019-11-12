@@ -24,7 +24,18 @@ struct Queue
 	int* store;
 };
 
+struct logQueue
+{
+	// first in first out
+	int size;
+	int capacity;
+	int first;
+	int last;
+	char** store;
+};
+
 int isFull(struct Queue *q);
+void *logwork(void *arg);
 int open_listenfd(int);
 void put(int socket, struct Queue* workQ);
 int get(struct Queue* workQ);
@@ -36,5 +47,11 @@ int dequeue(struct Queue* q);
 int isEmpty(struct Queue *q);
 void service(char *wordArray[], int clientSocket);
 void printQ(struct Queue* q);
+void enqueuelog(char *result, struct logQueue* logQ);
+char* dequeuelog(struct logQueue* q);
+int islogEmpty(struct logQueue *q);
+void initlogQueue(struct logQueue* q, int capacity);
+void printlogQ(struct logQueue* q);
+int logsize(struct logQueue* q);
 
 #endif
