@@ -10,11 +10,16 @@
 //The server will then use the socket descriptor to communicate with the user, sending and 
 //receiving messages.
 FILE* dictionaryfile;
+FILE* logtext;
 char *wordArray[99999];
 pthread_cond_t empty, fill = PTHREAD_COND_INITIALIZER;
+pthread_cond_t logfill = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t logmutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct Queue* workQ;
+struct logQueue* logQ;
+int first = 1;
 
 
 int main(int argc, char** argv)
@@ -22,7 +27,10 @@ int main(int argc, char** argv)
 
 
 	workQ = malloc(sizeof(struct Queue));	
-	initQueue(workQ, 10);
+	initQueue(workQ, 1000);
+	logQ = malloc(sizeof(struct Queue));	
+	initlogQueue(logQ, 1000);
+
 	dictionaryfile = fopen("dictionary.txt", "r");
 	int linenum = 0;
 	char line[256];
@@ -79,17 +87,17 @@ int main(int argc, char** argv)
 	pthread_create(&work4, NULL, worker, NULL) ;
 	pthread_t work5;
 	pthread_create(&work5, NULL, worker, NULL) ;
+	pthread_t logger;
+	pthread_create(&logger, NULL, logwork, NULL) ;
 	while(1){
 		if((clientSocket = accept(connectionSocket, (struct sockaddr*)&client, &clientLen)) == -1){// the accept(), returns connected descriptor
 			printf("Error connecting to client.\n");
 			return -1;
 		}
-		printf("ARRIVE: %d\n", clientSocket);
 		pthread_mutex_lock(&mutex); 
 		while (isFull(workQ)) //while full, wait for empty condition
 			pthread_cond_wait(&empty, &mutex); 
 		put(clientSocket, workQ); //add conected_socke to work queue
-		printf("QUEUE AFTER PUT:");
 		printQ(workQ);
 		pthread_cond_signal(&fill); //signal sleeping workers that there's a  new socket in queue
 		pthread_mutex_unlock(&mutex); 
@@ -99,11 +107,11 @@ int main(int argc, char** argv)
 	pthread_join(work3, NULL);
 	pthread_join(work4, NULL);
 	pthread_join(work5, NULL);
+	pthread_join(logger, NULL);
 	return 0;
 }
 
 void put(int socket, struct Queue* workQ) {
-	printf("put should add : %d\n", socket);
 	enqueue(socket,workQ);
 }
 
@@ -112,16 +120,36 @@ int get(struct Queue* workQ) {
 	return tmp;
  }
 
+
+ void *logwork(void *arg){
+ 	while(1){
+		pthread_mutex_lock(&logmutex); 
+		 while (islogEmpty(logQ)) //while empty, wait for fill condition
+			 pthread_cond_wait(&logfill, &logmutex);
+		 char* result = dequeuelog(logQ);//remove a socket from the queue
+		 //printf("QUEUE AFTER GET:");
+		// printQ(workQ);
+		 if(first == 1){
+		 logtext = fopen("logtext.txt", "w+");
+		 first = 0;
+		}
+		else{
+			logtext = fopen("logtext.txt", "a+");
+		}
+		 fputs(result,logtext); 
+		 fclose(logtext);
+		 pthread_mutex_unlock(&logmutex);
+		
+	}
+
+ }
+
  void *worker(void *arg) { //consumer
- 	printf("work!\n");
  	while(1){
 		pthread_mutex_lock(&mutex); 
 		 while (isEmpty(workQ)) //while empty, wait for fill condition
 			 pthread_cond_wait(&fill, &mutex);
-		 printf("get\n");
 		 int tmpsocket = get(workQ);//remove a socket from the queue
-		 printf("QUEUE AFTER GET:");
-		 printQ(workQ);
 		 pthread_cond_signal(&empty);//notify that there's an empty spot in the queue
 		 //service client
 		 pthread_mutex_unlock(&mutex);
@@ -130,10 +158,8 @@ int get(struct Queue* workQ) {
  }
 
 void service(char *wordArray[], int clientSocket){
-	printf("service\n");
 	int bytesReturned;
 	char recvBuffer[BUF_LEN];
-	printf("socket: %d\n", clientSocket);
 	recvBuffer[0] = '\0';
 	printf("Connection success!\n");
 	char* clientMessage = "Hello! I hope you can see this.\n";
@@ -204,19 +230,28 @@ void service(char *wordArray[], int clientSocket){
 				char *tempMsgOK = strcat(recvBuffer, msgOK);
 				//OK
 				send(clientSocket, tempMsgOK, strlen(tempMsgOK), 0);
+
+			   	char buf[50];
+		    	snprintf(buf, 50, "socket %d: %s",clientSocket, tempMsgOK); // puts string into buffer
+		  	
+				enqueuelog(buf, logQ);
 			}
 			else{
 				char *tempMsgMIS = strcat(recvBuffer, msgMISSPELLED);
 				//MISSPELLED
 				send(clientSocket, tempMsgMIS, strlen(tempMsgMIS), 0);
+				char buf[50];
+		    	snprintf(buf, 50, "socket %d: %s",clientSocket, tempMsgMIS); // puts string into buffer
+		  	
+		
+				enqueuelog(buf, logQ);
 			}
-			//put result in log
+			pthread_cond_signal(&logfill);
+			//printlogQ(logQ);
+			
 		}
 	}
 }
-
-
-
 
 
 
@@ -241,8 +276,6 @@ void enqueue(int socket , struct Queue* q){
 	
 		//printf("ENQUEUE Q->SIZE: %d\n",q->size);
 		//printf("ENQUEUE Q->STORE[Q->SIZE]: %d\n",q->store[q->size]);
-
-
 }
 
 int size(struct Queue* q){
@@ -261,8 +294,6 @@ int dequeue(struct Queue* q){
 }
 
 int isFull(struct Queue *q){
-	printf("workq size: %d", workQ->size);
-	printf("workq capacity: %d", workQ->capacity);
 	if (q->size == q->capacity){
 		return 1;
 	}
@@ -279,13 +310,62 @@ int isEmpty(struct Queue *q){
 		return 0;
 	}
 }
+
 void printQ(struct Queue* q){
 	printf("\n");
-	printf("THE QUEUE:");
-	printf("Q-FIRST: %d\n", q->first);
 	for(int i = q->first; i < size(q); i++){
 		
 		printf("%d, ", q->store[i]);
 	}
 		printf("\n");
+}
+
+void initlogQueue(struct logQueue* q, int capacity) { 
+    q->capacity = capacity; 
+    q->first =  0;  
+    q->size = 0; 
+    q->last = 0; 
+    q->store = malloc(q->capacity * sizeof(char**)); 
+} 
+
+
+void enqueuelog(char *result, struct logQueue* logQ){
+	if(logQ->last == logQ->capacity){
+		printf("FIFO queue->size == capacity");
+	}
+	logQ->size++;
+	logQ->store[logQ->last] = strdup(result);
+	logQ->last++;
+}
+
+char* dequeuelog(struct logQueue* logQ){
+	if (logQ->size == 0){
+		return "WRONG";
+	}
+	char *result = (logQ->store[logQ->first]);
+	logQ->first++;
+	logQ->size--;
+	return result;
+}
+
+int islogEmpty(struct logQueue *q){
+	if(q->size == 0){
+		return 1;
+	}
+	else{
+		return 0;
+	}
+}
+
+void printlogQ(struct logQueue* q){
+
+	printf("\n");
+	for(int i = q->first; i < logsize(q); i++){
+		printf("%s, ", q->store[i]);
+	}
+		printf("\n");
+}
+
+int logsize(struct logQueue* q){
+ 	return q->last;
 }
